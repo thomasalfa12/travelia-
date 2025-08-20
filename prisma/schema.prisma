@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===================================
+// MODEL PENGGUNA & PROFIL
+// ===================================
+
+model User {
+  id        Int      @id @default(autoincrement())
+  whatsapp  String   @unique
+  name      String
+  role      UserRole @default(MAHASISWA)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  driverProfile DriverProfile?
+  bookings      Booking[] // Seorang user bisa punya banyak booking
+}
+
+model DriverProfile {
+  id          Int          @id @default(autoincrement())
+  plateNumber String       @unique
+  vehicleType String // Misal: "Avanza", "Hiace"
+  status      DriverStatus @default(NONAKTIF)
+  domicile    String? // [Fitur Pra-Pesan] Area domisili supir, misal: "Demang", "Bukit"
+  latitude    Float? // Menyimpan latitude terakhir
+  longitude   Float? // Menyimpan longitude terakhir
+  fcmToken    String?
+
+  userId Int    @unique
+  user   User   @relation(fields: [userId], references: [id])
+  trips  Trip[] // Seorang supir bisa punya banyak trip
+}
+
+// ===================================
+// MODEL PERJALANAN & PEMESANAN
+// ===================================
+
+// --- Model Baru: Perjalanan Fisik oleh Supir ---
+model Trip {
+  id            Int        @id @default(autoincrement())
+  status        TripStatus @default(WAITING_FOR_DRIVER)
+  departureTime DateTime // Waktu keberangkatan yang dijadwalkan
+  capacity      Int // Kapasitas maksimum mobil, misal: 7
+
+  destination String? // [BARU] Tujuan akhir dari perjalanan ini
+  seatsTaken  Int     @default(0) // [BARU] Jumlah kursi yang sudah terisi
+
+  driverId Int
+  driver   DriverProfile @relation(fields: [driverId], references: [id])
+
+  bookings Booking[] // Satu trip bisa memiliki banyak booking
+}
+
+// --- Model Baru: Reservasi oleh Mahasiswa ---
+model Booking {
+  id               Int           @id @default(autoincrement())
+  status           BookingStatus @default(PENDING)
+  origin           String
+  destination      String
+  passengers       Int           @default(1) // Jumlah penumpang yang dipesan
+  price            Int
+  paymentStatus    PaymentStatus @default(UNPAID)
+  paymentGatewayId String? // ID transaksi dari Midtrans
+
+  userId     Int
+  user       User    @relation(fields: [userId], references: [id])
+  isPickedUp Boolean @default(false)
+
+  // Jika tripId null, artinya booking ini ada di "waitlist"
+  tripId Int?
+  trip   Trip? @relation(fields: [tripId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// ===================================
+// ENUMS (Kumpulan Pilihan Status)
+// ===================================
+model Otp {
+  id        Int      @id @default(autoincrement())
+  code      String
+  whatsapp  String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+enum UserRole {
+  MAHASISWA
+  SUPIR
+}
+
+enum DriverStatus {
+  AKTIF
+  NONAKTIF
+  SIBUK
+}
+
+enum TripStatus {
+  WAITING_FOR_DRIVER // [Pra-Pesan] Menunggu supir mengambil jadwal
+  CONFIRMED // Supir sudah mengambil, siap jalan
+  ONGOING_PICKUP
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+enum BookingStatus {
+  PENDING // [On-the-Spot] Menunggu supir terdekat
+  WAITING_GROUP // [Smart Waitlist] Menunggu grup terbentuk
+  CONFIRMED // Sudah dapat trip dan siap berangkat
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  FAILED
+}

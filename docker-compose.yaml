@@ -1,0 +1,22 @@
+# Versi file compose
+version: "3.9"
+
+# Daftar service/layanan yang akan kita jalankan
+services:
+  # Nama service kita, bisa apa saja, misal 'db'
+  db:
+    image: postgres:latest # Gunakan image resmi postgres terbaru
+    container_name: unsri_travel_postgres # Nama container yang akan dibuat
+    restart: always # Selalu restart jika container mati secara tidak sengaja
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: unsri_travel
+    ports:
+      - "5432:5432" # Map port 5432 di komputer kita ke port 5432 di dalam container
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Menyimpan data agar tidak hilang saat container dihapus
+
+# Definisi volume untuk persistensi data
+volumes:
+  postgres_data:
