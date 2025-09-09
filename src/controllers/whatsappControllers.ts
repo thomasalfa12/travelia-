@@ -1,184 +1,144 @@
 import { PrismaClient } from '@prisma/client';
-import { createNewBooking } from '../service/bookingService';
-import { analyzeMessageWithAI, AIResponse } from '../service/openai';
-import { findAvailableDriversNearby, getCoordinatesFromLocationName } from '../service/matchingService';
-import { sendMessage } from '../service/whatsappService';
+import { createOnTheSpotBooking, createPreBooking } from '../service/bookingService';
+import { analyzeConversationWithAI, AIResponse } from '../service/openai';
+// --- [FIX] Impor instance `geoService` dari file yang benar ---
+import { geoService } from '../service/geoService';
 
 const prisma = new PrismaClient();
 
 // Implementasi Memori Sederhana (untuk development)
-const conversationHistories: { [key: string]: string[] } = {};
+const conversationHistories: { [key: string]: { history: string[], lastActivity: number } } = {};
 
-// --- Handler untuk Pesanan Baru (Mahasiswa) ---
-async function handleNewBookingRequest(aiResponse: AIResponse, senderWA: string): Promise<string> {
+// --- Handler untuk Aksi-Aksi Spesifik ---
+
+async function handleBookingIntent(aiResponse: AIResponse, senderWA: string): Promise<string> {
   const { name, origin, destination, time, passengers } = aiResponse.extractedInfo;
 
-  if (name && origin && destination && time && passengers) {
-    try {
-      await createNewBooking({
-        whatsapp: senderWA,
-        name: name,
-        origin: origin,
-        destination: destination,
-        passengers: passengers,
-      });
-      // Gunakan balasan dari AI yang sudah dikontekstualisasikan
-      return aiResponse.replySuggestion;
-    } catch (error) {
-      console.error(error);
-      return 'Waduh, ada kesalahan di sistem kami pas nyatet pesanan. Coba lagi yo.';
-    }
+  if (!name || !origin || !destination || !time || !passengers) {
+    return aiResponse.replySuggestion;
   }
-  // Ini adalah fallback jika karena suatu alasan statusnya COMPLETE tapi datanya tidak lengkap.
-  return 'Terjadi kesalahan internal: Data booking tidak lengkap.';
+
+  const bookingData = { whatsapp: senderWA, name, origin, destination, time, passengers };
+
+  try {
+    if (aiResponse.bookingMode === 'PRE_BOOK') {
+      await createPreBooking(bookingData);
+    } else {
+      await createOnTheSpotBooking(bookingData);
+    }
+    return aiResponse.replySuggestion;
+  } catch (error: any) {
+    console.error("Error saat membuat booking:", error);
+    return `Waduh, terjadi kesalahan: ${error.message}`;
+  }
 }
 
-// --- Handler untuk Pengecekan Ketersediaan ---
-async function handleAvailabilityCheck(aiResponse: AIResponse, senderWA: string): Promise<string> {
+async function handleAvailabilityCheck(aiResponse: AIResponse): Promise<string> {
   const origin = aiResponse.extractedInfo.origin;
   if (!origin) {
-    return "Untuk mengecek supir terdekat, mohon infokan lokasi penjemputan Anda saat ini.";
+    return aiResponse.replySuggestion;
   }
 
-  const userLocation = await getCoordinatesFromLocationName(origin);
+  // --- [FIX] Gunakan `geoService` untuk mengonversi lokasi ---
+  const userLocation = await geoService.getCoordinatesFromLocation(origin);
   if (!userLocation) {
     return `Maaf, lokasi "${origin}" tidak kami kenali. Mohon berikan nama tempat yang lebih spesifik.`;
   }
 
-  const availability = await findAvailableDriversNearby(userLocation);
+  // --- [FIX] Gunakan `geoService` untuk mencari supir ---
+  const availability = await geoService.findAvailableDriversNearby(userLocation);
+  
   if (availability.within5km > 0) {
     return `Ditemukan ${availability.within5km} travel aktif dalam radius 5 km dari lokasi Anda.`;
   } else if (availability.outside5km > 0) {
-    return `Saat ini tidak ada travel dalam 5 km. Tersedia ${availability.outside5km} travel dalam radius lebih jauh (terdekat ~${availability.nearestOutsideDistanceKm} km).`;
+    return `Saat ini tidak ada travel dalam 5 km. Tersedia ${availability.outside5km} travel dalam radius lebih jauh (terdekat ~${availability.nearestOutsideDistanceKm?.toFixed(1)} km).`;
   } else {
     return "Mohon maaf, saat ini tidak ada travel yang aktif di sekitar Anda.";
   }
 }
 
-// --- Handler untuk Perintah dari Supir: Mengambil Booking ---
-async function handleAcceptBooking(bookingId: number, senderWA: string): Promise<string> {
-    const driver = await prisma.user.findUnique({
-      where: { whatsapp: senderWA, role: 'SUPIR' },
-      include: { driverProfile: true },
-    });
-  
-    if (!driver || !driver.driverProfile) {
-      return 'Perintah ini hanya untuk supir terdaftar.';
-    }
-  
-    try {
-      const confirmedBooking = await prisma.$transaction(async (tx) => {
-        const booking = await tx.booking.findUnique({
-          where: { id: bookingId },
-          include: { user: true },
-        });
-  
-        if (!booking || booking.status !== 'PENDING') {
-          throw new Error('Tawaran sudah diambil atau tidak valid.');
-        }
-  
-        const newTrip = await tx.trip.create({
-          data: {
-            driverId: driver.driverProfile!.id,
-            status: 'ONGOING_PICKUP',
-            destination: booking.destination,
-            departureTime: new Date(),
-            capacity: 7,
-          },
-        });
-  
-        return await tx.booking.update({
-          where: { id: bookingId },
-          data: { status: 'CONFIRMED', tripId: newTrip.id },
-          include: { user: true },
-        });
-      });
-      
-      const studentWhatsapp = `whatsapp:${confirmedBooking.user.whatsapp}`;
-      const studentMessage = `✅ Supir ditemukan! Pesanan Anda #${confirmedBooking.id} akan dijemput oleh ${driver.name} (${driver.driverProfile.plateNumber}).`;
-      await sendMessage(studentWhatsapp, studentMessage);
-  
-      return `✅ Anda berhasil mengambil booking #${confirmedBooking.id} untuk dijemput.`;
-    } catch (error: any) {
-      return `Gagal mengambil booking: ${error.message}`;
-    }
-}
-
-// --- Handler untuk mengubah status supir ---
 async function handleUpdateStatus(newStatus: 'AKTIF' | 'NONAKTIF', senderWA: string): Promise<string> {
-    const driver = await prisma.user.findUnique({
-      where: { whatsapp: senderWA, role: 'SUPIR' },
-      include: { driverProfile: true },
-    });
-  
-    if (!driver || !driver.driverProfile) {
-      return 'Perintah ini hanya untuk supir terdaftar.';
-    }
-  
-    try {
-      await prisma.driverProfile.update({
-        where: { id: driver.driverProfile.id },
-        data: { status: newStatus },
-      });
-      return `Status Anda berhasil diubah menjadi *${newStatus}*.`;
-    } catch (error) {
-      return 'Gagal mengubah status.';
-    }
-}
+  const driver = await prisma.user.findUnique({
+    where: { whatsapp: senderWA, role: 'SUPIR' },
+    include: { driverProfile: true },
+  });
 
-
-/**
- * [FUNGSI UTAMA] yang telah diperbarui untuk menjadi Orchestrator.
- */
-export async function handleIncomingMessage(incomingMsg: string, senderWA:string): Promise<string> {
-  const lowerCaseMsg = incomingMsg.toLowerCase();
-
-  // Prioritaskan perintah supir (tidak perlu AI)
-  const ambilMatch = lowerCaseMsg.match(/^ambil\s+(\d+)/);
-  if (ambilMatch) {
-    const bookingId = parseInt(ambilMatch[1]);
-    return await handleAcceptBooking(bookingId, senderWA);
+  if (!driver || !driver.driverProfile) {
+    return 'Perintah ini hanya untuk supir terdaftar.';
   }
 
+  try {
+    await prisma.driverProfile.update({
+      where: { id: driver.driverProfile.id },
+      data: { status: newStatus },
+    });
+    return `Status Anda berhasil diubah menjadi *${newStatus}*.`;
+  } catch (error) {
+    return 'Gagal mengubah status.';
+  }
+}
+
+/**
+ * [FUNGSI UTAMA] Bertindak sebagai "Orchestrator" dan "Manajer Konteks".
+ */
+export async function handleIncomingMessage(incomingMsg: string, senderWA: string): Promise<string> {
+  const lowerCaseMsg = incomingMsg.toLowerCase();
+
+  // 1. Prioritaskan perintah supir (cepat, tanpa AI)
   const statusMatch = lowerCaseMsg.match(/^(aktif|nonaktif)$/);
   if (statusMatch) {
     const newStatus = statusMatch[1].toUpperCase() as 'AKTIF' | 'NONAKTIF';
     return await handleUpdateStatus(newStatus, senderWA);
   }
 
-  // Manajemen Memori
-  if (!conversationHistories[senderWA]) {
-    conversationHistories[senderWA] = [];
+  // 2. Persiapkan "Paket Konteks" untuk AI (Memori Cerdas)
+  const now = Date.now();
+  if (!conversationHistories[senderWA] || (now - conversationHistories[senderWA].lastActivity > 10 * 60 * 1000)) {
+    conversationHistories[senderWA] = { history: [], lastActivity: now };
   }
-  conversationHistories[senderWA].push(`User: ${incomingMsg}`);
-  const fullConversation = conversationHistories[senderWA].join('\n');
+  conversationHistories[senderWA].history.push(`User: ${incomingMsg}`);
+  conversationHistories[senderWA].lastActivity = now;
+  
+  const user = await prisma.user.findUnique({ where: { whatsapp: senderWA } });
+  const userSummary = `(Info Pengguna: Nama=${user?.name || 'Belum Diketahui'})`;
 
-  // Panggil AI dengan seluruh riwayat percakapan
-  const aiResponse = await analyzeMessageWithAI(fullConversation);
+  const currentTime = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false });
+  const timeContext = `(Waktu saat ini: ${currentTime} WIB)`;
+
+  const recentHistory = conversationHistories[senderWA].history.slice(-15).join('\n');
+  const contextualHistory = `${userSummary}\n${timeContext}\n\n${recentHistory}`;
+
+  // 3. Panggil AI dengan paket konteks yang sudah siap
+  const aiResponse = await analyzeConversationWithAI(contextualHistory);
 
   if (!aiResponse) {
-    conversationHistories[senderWA].pop(); 
-    return 'Waduh, lagi ado masalah samo AI nyo. Coba bentar lagi yo.';
+    conversationHistories[senderWA].history.pop();
+    return 'Waduh, lagi ada masalah sama AI-nya. Coba bentar lagi ya.';
   }
 
-  // Simpan balasan AI ke riwayat
-  conversationHistories[senderWA].push(`AI: ${aiResponse.replySuggestion}`);
+  conversationHistories[senderWA].history.push(`AI: ${aiResponse.replySuggestion}`);
 
-  // Logika Orkestrasi berdasarkan niat dari AI
+  // 4. Logika Orkestrasi Berdasarkan Niat dari AI
   switch (aiResponse.intent) {
     case 'BOOKING_REQUEST':
-      // Hanya buat booking jika AI menyatakan formulir sudah siap diproses
-      if (aiResponse.bookingStatus === 'COMPLETE' || aiResponse.bookingStatus === 'PENDING_DRIVER') {
-        return await handleNewBookingRequest(aiResponse, senderWA);
+      if (aiResponse.bookingStatus === 'COMPLETE') {
+        return await handleBookingIntent(aiResponse, senderWA);
       }
       return aiResponse.replySuggestion;
 
     case 'AVAILABILITY_CHECK':
-      return await handleAvailabilityCheck(aiResponse, senderWA);
+      return await handleAvailabilityCheck(aiResponse);
     
+    case 'OUTSIDE_HOURS':
+      if (aiResponse.extractedInfo.origin && aiResponse.extractedInfo.destination) {
+          await handleBookingIntent(aiResponse, senderWA);
+      }
+      return aiResponse.replySuggestion;
+
     case 'GREETING':
     case 'OTHER':
     default:
       return aiResponse.replySuggestion;
   }
 }
+

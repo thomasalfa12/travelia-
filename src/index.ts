@@ -1,8 +1,9 @@
 import express, { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import * as dotenv from 'dotenv';
+import { schedulerService } from './service/schedulerService';
 
-import { createNewBooking } from './service/bookingService';
+
 import { registerDriver } from './service/driverService';
 import { handleIncomingMessage } from './controllers/whatsappControllers'; // <-- Impor controller utama
 import { 
@@ -12,8 +13,9 @@ import {
   handleUpdateDriverLocation, 
   handleRegisterFcmToken } from './controllers/driverController';
 import { authMiddleware } from './middleware/authMiddleware';
-import { handleAcceptTrip, handleRejectTrip } from './controllers/tripController';
-
+import { handleAcceptTrip, handleRejectTrip, handleBookingPickup, handleCompleteTrip } from './controllers/tripController';
+import { getAvailableBookings } from './controllers/bookingController';
+import { getAvailableSchedules, claimSchedule } from './controllers/schedulerController';
 dotenv.config();
 
 const app = express();
@@ -22,24 +24,30 @@ const prisma = new PrismaClient(); // prisma client tetap dibutuhkan untuk endpo
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 // =================================================================
-// ENDPOINTS API 
+// == API ENDPOINTS PUBLIK & OTENTIKASI ==
 // =================================================================
 app.post('/api/drivers/login/request-otp', handleRequestOtp);
 app.post('/api/drivers/login/verify-otp', handleVerifyOtp);
+// =================================================================
+// == API ENDPOINTS UNTUK APLIKASI DRIVER (TERLINDUNGI) ==
+// =================================================================
 app.post('/api/drivers/status', authMiddleware, handleUpdateDriverStatus);
 app.post('/api/drivers/location', authMiddleware, handleUpdateDriverLocation);
-app.post('/api/drivers/fcm-token', authMiddleware,  handleRegisterFcmToken);
+app.post('/api/drivers/fcm-token', authMiddleware, handleRegisterFcmToken);
 app.post('/api/trips/accept', authMiddleware, handleAcceptTrip);
 app.post('/api/trips/reject', authMiddleware, handleRejectTrip);
+app.post('/api/bookings/:bookingId/complete-pickup', authMiddleware, handleBookingPickup);
+app.post('/api/trips/:tripId/complete', authMiddleware, handleCompleteTrip);
+app.get('/api/bookings/available', getAvailableBookings);
+app.get('/api/schedules', authMiddleware, getAvailableSchedules);
+app.post('/api/schedules/claim', authMiddleware, claimSchedule);
 
-app.get('/', (req: Request, res: Response) => {
-  res.send('Selamat datang di API Agent Travel Unsri!');
-});
+// =================================================================
+// == API ENDPOINTS UNTUK ADMINISTRASI 
+// =================================================================
 
-
-app.post('/api/users', async (req: Request, res: Response) => {
+app.post('/api/admin/users', async (req: Request, res: Response) => {
     // (kode endpoint ini tidak berubah)
     try {
         const { whatsapp, name, role } = req.body;
@@ -56,9 +64,7 @@ app.post('/api/users', async (req: Request, res: Response) => {
     }
 });
 
-
-
-app.post('/api/drivers', async (req: Request, res: Response) => {
+app.post('/api/admin/drivers', async (req: Request, res: Response) => {
   try {
     const newDriver = await registerDriver(req.body);
     res.status(201).json(newDriver);
@@ -68,19 +74,8 @@ app.post('/api/drivers', async (req: Request, res: Response) => {
   }
 });
 
-// --- Endpoint Booking (SEKARANG MEMANGGIL SERVICE) ---
-app.post('/api/bookings', async (req: Request, res: Response) => {
-  try {
-    const newBooking = await createNewBooking(req.body);
-    res.status(201).json(newBooking);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Gagal membuat pesanan' });
-  }
-});
-
 // =================================================================
-// WEBHOOK WHATSAPP
+// == WEBHOOK UNTUK WHATSAPP (MAHASISWA) ==
 // =================================================================
 
 app.post('/api/whatsapp', async (req: Request, res: Response) => {
@@ -103,6 +98,12 @@ app.post('/api/whatsapp', async (req: Request, res: Response) => {
   }
 });
 
+// Endpoint GET sederhana untuk testing
+app.get('/', (req: Request, res: Response) => {
+  res.send('Selamat datang di API Agent Travel Unsri!');
+});
+
 app.listen(port, () => {
   console.log(`🚀 Server berjalan di http://localhost:${port}`);
+  schedulerService.initializeAllJobs(); 
 });

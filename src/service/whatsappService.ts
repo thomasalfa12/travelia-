@@ -6,11 +6,6 @@ const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
 
 const client = twilio(accountSid, authToken);
 
-/**
- * Mengirim pesan WhatsApp ke nomor tujuan
- * @param to Nomor tujuan dalam format 'whatsapp:+628xxxx'
- * @param body Isi pesan
- */
 export async function sendMessage(to: string, body: string) {
   if (!accountSid || !authToken || !twilioNumber) {
     console.error("Kredensial Twilio tidak diatur di .env");

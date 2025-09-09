@@ -56,33 +56,58 @@ model Trip {
   driver   DriverProfile @relation(fields: [driverId], references: [id])
 
   bookings Booking[] // Satu trip bisa memiliki banyak booking
+  Schedule Schedule?
 }
 
 // --- Model Baru: Reservasi oleh Mahasiswa ---
 model Booking {
-  id               Int           @id @default(autoincrement())
-  status           BookingStatus @default(PENDING)
-  origin           String
-  destination      String
-  passengers       Int           @default(1) // Jumlah penumpang yang dipesan
-  price            Int
-  paymentStatus    PaymentStatus @default(UNPAID)
-  paymentGatewayId String? // ID transaksi dari Midtrans
+  id                     Int           @id @default(autoincrement())
+  status                 BookingStatus @default(PENDING)
+  origin                 String
+  destination            String
+  passengers             Int           @default(1)
+  price                  Int
+  // [BARU] Menyimpan waktu keberangkatan yang diinginkan untuk pra-pesan
+  scheduledDepartureTime DateTime?
+  isPickedUp             Boolean       @default(false)
+  paymentStatus          PaymentStatus @default(UNPAID)
+  paymentGatewayId       String?
 
-  userId     Int
-  user       User    @relation(fields: [userId], references: [id])
-  isPickedUp Boolean @default(false)
+  userId Int
+  user   User @relation(fields: [userId], references: [id])
 
-  // Jika tripId null, artinya booking ini ada di "waitlist"
   tripId Int?
   trip   Trip? @relation(fields: [tripId], references: [id])
 
+  scheduleId Int?
+  schedule   Schedule? @relation(fields: [scheduleId], references: [id])
+
   createdAt DateTime @default(now())
+}
+
+model Schedule {
+  id              Int            @id @default(autoincrement())
+  status          ScheduleStatus @default(AVAILABLE)
+  departureTime   DateTime
+  originArea      String // Misal: "Grup Area Bukit"
+  destination     String
+  totalPassengers Int
+
+  bookings Booking[] // Booking apa saja yang ada di grup ini
+
+  tripId Int?  @unique
+  trip   Trip? @relation(fields: [tripId], references: [id])
 }
 
 // ===================================
 // ENUMS (Kumpulan Pilihan Status)
 // ===================================
+enum ScheduleStatus {
+  AVAILABLE // Tersedia di papan pekerjaan
+  CLAIMED // Sudah diambil oleh supir
+  EXPIRED // Dibatalkan karena tidak ada yang mengambil
+}
+
 model Otp {
   id        Int      @id @default(autoincrement())
   code      String
@@ -116,6 +141,8 @@ enum BookingStatus {
   WAITING_GROUP // [Smart Waitlist] Menunggu grup terbentuk
   CONFIRMED // Sudah dapat trip dan siap berangkat
   CANCELLED
+  SCHEDULED
+  QUEUED_OVERNIGHT
 }
 
 enum PaymentStatus {

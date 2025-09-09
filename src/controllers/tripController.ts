@@ -1,7 +1,4 @@
-/**
- * src/controllers/tripController.ts
- * Menangani semua logika yang berkaitan dengan perjalanan (Trip).
- */
+
 import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AuthRequest } from '../middleware/authMiddleware';
@@ -141,6 +138,33 @@ export async function handleBookingPickup(req: AuthRequest, res: Response) {
     }
 }
 
+export async function handleCompleteTrip(req: AuthRequest, res: Response) {
+  const {tripId} = req.params;
+  const driverProfileId = req.user?.driverProfileId;
+
+  if (!driverProfileId){
+    return res.status(403).json({error: 'Akes ditolak. Token tidak valid.'})
+  }
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.trip.update({
+        where: {
+          id: parseInt(tripId),
+          driverId: driverProfileId
+        },
+        data:{ status: 'COMPLETED'}
+      });
+      await tx.driverProfile.update({
+        where: {id: driverProfileId },
+        data: { status: 'AKTIF'}
+      });
+    });
+    res.status(200).json({ message: `Perjalanan #${tripId} berhasil diselesaikan.`})
+  } catch (error){
+    console.error("Error saat menyelesaikan perjalanan:", error);
+    res.status(403).json({ error: "Gagal menyelesaikan perjalanan atau Anda tidak berhak."})
+  }
+}
 
 /**
  * Helper function untuk membangun struktur data ActiveTrip.
@@ -150,6 +174,7 @@ async function buildActiveTripResponse(tripId: number) {
     where: { id: tripId },
     include: {
       bookings: {
+        orderBy: { createdAt: 'asc'},
         include: {
           user: true,
         },

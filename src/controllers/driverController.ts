@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken'; // <-- [1] Impor library JWT
 import { sendMessage } from '../service/whatsappService'; 
+import { AuthRequest } from '../middleware/authMiddleware'; 
 const prisma = new PrismaClient();
 
 export async function handleDriverLogin(req: Request, res: Response) {
@@ -178,28 +179,30 @@ export async function handleUpdateDriverStatus(req: Request, res: Response) {
   }
 }
 
-export async function handleUpdateDriverLocation(req: Request, res: Response) {
-  const { driverProfileId, latitude, longitude } = req.body;
+export async function handleUpdateDriverLocation(req: AuthRequest, res: Response) {
+  // Ambil ID supir dari token JWT
+  const driverProfileId = req.user?.driverProfileId;
+  const { latitude, longitude } = req.body;
 
-  if (!driverProfileId || latitude === undefined || longitude === undefined) {
-    return res.status(400).json({ error: 'driverProfileId, latitude, dan longitude wajib diisi.' });
+  if (!driverProfileId) {
+      return res.status(403).json({ error: 'Akses ditolak.' });
+  }
+  if (latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ error: 'Latitude dan longitude wajib diisi.' });
   }
 
   try {
-    // --- SIMPAN LOKASI KE DATABASE ---
-    await prisma.driverProfile.update({
-      where: { id: parseInt(driverProfileId, 10) },
-      data: {
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-      },
-    });
-
-    res.status(200).json({ message: 'Lokasi berhasil diperbarui' });
-
+      await prisma.driverProfile.update({
+          where: { id: driverProfileId },
+          data: {
+              latitude: parseFloat(latitude),
+              longitude: parseFloat(longitude),
+          },
+      });
+      res.status(200).json({ message: 'Lokasi berhasil diperbarui' });
   } catch (error) {
-    console.error('Error saat update lokasi supir:', error);
-    res.status(500).json({ error: 'Gagal memperbarui lokasi.' });
+      console.error('Error saat update lokasi supir:', error);
+      res.status(500).json({ error: 'Gagal memperbarui lokasi.' });
   }
 }
 export async function handleRegisterFcmToken(req: Request, res: Response) {
