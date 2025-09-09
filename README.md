@@ -32,7 +32,7 @@ Proyek ini bertujuan untuk menggantikan sistem pemesanan travel manual yang tida
 - **ORM:** Prisma  
 - **API Komunikasi:**  
   - Mahasiswa: Twilio WhatsApp API  
-  - AI Agent: OpenAI API (GPT-4o)  
+  - AI Agent: OpenAI API (GPT-5)  
   - Aplikasi Driver: Firebase Cloud Messaging (FCM)  
 - **Otentikasi:** JWT & OTP  
 - **Deployment (Rencana):** Railway.app atau layanan serupa  
